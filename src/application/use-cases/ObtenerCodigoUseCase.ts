@@ -1,45 +1,54 @@
 import { IExtractorStrategy } from '../../domain/interfaces/IExtractorStrategy';
+import { IAccessLogRepository } from '../../domain/interfaces/IAccessLogRepository';
 
 export class ObtenerCodigoUseCase {
     private extractor: IExtractorStrategy;
+    private logRepository: IAccessLogRepository;
 
-    // Inyectamos la estrategia (ej. NetflixExtractor)
-    constructor(extractor: IExtractorStrategy) {
+    constructor(extractor: IExtractorStrategy, logRepository: IAccessLogRepository) {
         this.extractor = extractor;
+        this.logRepository = logRepository;
     }
 
-    /**
-     * Ejecuta la búsqueda del código con un timeout de 2 minutos.
-     * Busca en la bandeja cada 10 segundos.
-     */
-    async ejecutar(): Promise<string | null> {
-        const TIEMPO_MAXIMO_MS = 120000; // 2 minutos
-        const INTERVALO_MS = 10000;      // 10 segundos
+    async ejecutar(logId: string): Promise<string | null> {
+        const TIEMPO_MAXIMO_MS = 120000;
+        const INTERVALO_MS = 10000;
         const tiempoInicio = Date.now();
-
-        console.log(`⏳ Iniciando búsqueda de código para ${this.extractor.providerName}...`);
 
         return new Promise((resolve) => {
             const intervalo = setInterval(async () => {
                 const tiempoTranscurrido = Date.now() - tiempoInicio;
 
-                // 1. Condición de salida por Timeout
                 if (tiempoTranscurrido >= TIEMPO_MAXIMO_MS) {
                     clearInterval(intervalo);
-                    console.log(`⏰ Tiempo de espera agotado para ${this.extractor.providerName}.`);
+                    await this.logRepository.actualizarLog(logId, 'TIMEOUT');
                     resolve(null);
                     return;
                 }
 
-                // 2. Intentar extraer el código
-                const codigoEncontrado = await this.extractor.extractOTP();
+                try {
+                    const resultado = await this.extractor.extractOTP();
 
-                if (codigoEncontrado) {
+                    if (resultado) {
+                        // 🛡️ ANTICOLISIÓN: Verificamos si este correo ya se le dio a otro usuario
+                        const correoUsado = await this.logRepository.fueCorreoUsado(resultado.emailUid);
+                        
+                        if (!correoUsado) {
+                            clearInterval(intervalo);
+                            // Marcamos como SUCCESS y guardamos la evidencia
+                            await this.logRepository.actualizarLog(logId, 'SUCCESS', resultado.codigo, resultado.emailUid);
+                            resolve(resultado.codigo);
+                            return;
+                        } else {
+                            console.log(`⚠️ Correo [UID: ${resultado.emailUid}] ya fue entregado. Ignorando...`);
+                        }
+                    }
+                } catch (error) {
+                    console.error('❌ Error asíncrono en extracción:', error);
                     clearInterval(intervalo);
-                    resolve(codigoEncontrado);
+                    await this.logRepository.actualizarLog(logId, 'ERROR');
+                    resolve(null);
                 }
-                
-                // Si no lo encuentra, el ciclo se repite en los próximos 10 segundos
             }, INTERVALO_MS);
         });
     }

@@ -1,4 +1,9 @@
+export interface ExtractorResult {
+    codigo: string;
+    emailUid: number;
+}
+
 export interface IExtractorStrategy {
     providerName: string;
-    extractOTP(): Promise<string | null>;
+    extractOTP(): Promise<ExtractorResult | null>;
 }

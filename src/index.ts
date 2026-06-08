@@ -5,6 +5,7 @@ import { NetflixExtractor } from './infrastructure/services/NetflixExtractor';
 import { ObtenerCodigoUseCase } from './application/use-cases/ObtenerCodigoUseCase';
 import { SupabaseUserRepository } from './infrastructure/repositories/SupabaseUserRepository';
 import { AutorizarUsuarioUseCase } from './application/use-cases/AutorizarUsuarioUseCase';
+import { SupabaseAccessLogRepository } from './infrastructure/repositories/SupabaseAccessLogRepository';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -86,6 +87,7 @@ bot.action('action_netflix', async (ctx) => {
     await ctx.answerCbQuery(); 
 
     const userRepository = new SupabaseUserRepository();
+    const logRepository = new SupabaseAccessLogRepository();
     const autorizarUseCase = new AutorizarUsuarioUseCase(userRepository);
 
     try {
@@ -101,25 +103,35 @@ bot.action('action_netflix', async (ctx) => {
             return;
         }
 
+        // 🛡️ REGLA DE NEGOCIO: Límite de 3 códigos por día
+        const exitosHoy = await logRepository.obtenerConteoExitosHoy(validacion.userId as string, 'netflix');
+        if (exitosHoy >= 3) {
+            await ctx.reply('🚫 Límite diario alcanzado: Ya has solicitado 3 códigos de Netflix hoy. Vuelve a intentarlo mañana.');
+            return;
+        }
+
+        // 📝 Creamos el Log en estado PENDING
+        const logId = await logRepository.crearLog(validacion.userId as string, 'netflix');
+
         // 2. Pasó la BD. Activamos el Candado Largo e iniciamos IMAP
         activeRequests.add(userId);
         
         await ctx.reply('⏳ Validación exitosa. Iniciando búsqueda del código de Netflix. Por favor, dale "Enviar código" en tu pantalla ahora...');
 
         const extractor = new NetflixExtractor();
-        const casoUso = new ObtenerCodigoUseCase(extractor);
+        const casoUso = new ObtenerCodigoUseCase(extractor, logRepository);
 
-        casoUso.ejecutar().then(async (codigo) => {
+        // Le pasamos el logId para que pueda actualizarlo
+        casoUso.ejecutar(logId).then(async (codigo) => {
             if (codigo) {
-                await ctx.reply(`🎉 ¡Código encontrado!\n\nTu código de acceso es: *${codigo}*`, { parse_mode: 'Markdown' });
+                await ctx.reply(`🎉 ¡Código encontrado!\n\nTu código es: *${codigo}*`, { parse_mode: 'Markdown' });
             } else {
-                await ctx.reply('⏰ Tiempo agotado. No hemos recibido un correo reciente con el código.');
+                await ctx.reply('⏰ Tiempo agotado. No hemos recibido el correo.');
             }
         }).catch(async (error) => {
-            console.error(`❌ Error en la extracción:`, error);
+            console.error(`❌ Error general:`, error);
             await ctx.reply('❌ Ocurrió un error interno al intentar leer la bandeja.');
         }).finally(() => {
-            // Liberamos el candado cuando termine de buscar correos
             activeRequests.delete(userId);
         });
 

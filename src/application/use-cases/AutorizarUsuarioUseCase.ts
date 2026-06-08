@@ -10,6 +10,7 @@ interface AutorizarInput {
 interface AutorizarOutput {
     isAuthorized: boolean;
     message: string;
+    userId?: string;
 }
 
 export class AutorizarUsuarioUseCase {
@@ -58,7 +59,8 @@ export class AutorizarUsuarioUseCase {
         // 5. Todo en orden: Usuario identificado y con pago/suscripción al día
         return {
             isAuthorized: true,
-            message: '✅ Acceso concedido.'
+            message: '✅ Acceso concedido.',
+            userId: user.id
         };
     }
 }
