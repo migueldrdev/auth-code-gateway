@@ -1,0 +1,95 @@
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { IUserRepository } from '../../domain/interfaces/IUserRepository';
+import { User } from '../../domain/entities/User';
+import { log } from 'node:console';
+
+export class SupabaseUserRepository implements IUserRepository {
+    private supabase: SupabaseClient;
+
+    constructor() {
+        const url = process.env.SUPABASE_URL;
+        const key = process.env.SUPABASE_KEY;
+
+        if (!url || !key) {
+            throw new Error('❌ Las variables SUPABASE_URL y SUPABASE_KEY son obligatorias en el .env');
+        }
+
+        this.supabase = createClient(url, key);
+    }
+
+    async findByTelegramId(telegramId: number): Promise<User | null> {
+        const { data, error } = await this.supabase
+            .from('users')
+            .select('*')
+            .eq('telegram_id', telegramId)
+            .maybeSingle();
+
+        if (error || !data) return null;
+
+        return {
+            id: data.id,
+            telegramId: Number(data.telegram_id),
+            telegramUsername: data.telegram_username,
+            createdAt: new Date(data.created_at)
+        };
+    }
+
+    async findByTelegramUsername(username: string): Promise<User | null> {
+        console.log(`SupabaseUserRepository: Buscando usuario por telegram_username = ${username}`);
+        const { data, error } = await this.supabase
+            .from('users')
+            .select('*')
+            .ilike('telegram_username', `%${username}%`)
+            .maybeSingle();
+
+        console.log(`SupabaseUserRepository: Resultado de la consulta por username:`, { data, error });
+        if (error || !data) return null;
+        
+        return {
+            id: data.id,
+            telegramId: data.telegram_id ? Number(data.telegram_id) : null,
+            telegramUsername: data.telegram_username,
+            createdAt: new Date(data.created_at)
+        };
+    }
+
+    async linkTelegramId(userId: string, telegramId: number): Promise<void> {
+        const { error } = await this.supabase
+            .from('users')
+            .update({ telegram_id: telegramId })
+            .eq('id', userId);
+
+        if (error) {
+            throw new Error(`❌ Error al vincular telegram_id: ${error.message}`);
+        }
+    }
+
+    
+    async checkSubscription(userId: string, serviceName: string): Promise<boolean> {
+        // Consulta relacional: busca si existe una suscripción activa vinculando las 3 tablas
+        const { data, error } = await this.supabase
+            .from('subscriptions')
+            .select(`
+                is_active,
+                expires_at,
+                services!inner(name)
+            `)
+            .eq('user_id', userId)
+            .eq('services.name', serviceName)
+            .eq('is_active', true)
+            .maybeSingle();
+            
+        if (error || !data) return false;
+
+        // Validar si la suscripción tiene fecha de expiración y si ya venció
+        const subscriptionData = data as any;
+        if (subscriptionData.expires_at) {
+            const expirationDate = new Date(subscriptionData.expires_at);
+            if (expirationDate < new Date()) {
+                return false; // Suscripción vencida
+            }
+        }
+
+        return true;
+    }
+}
