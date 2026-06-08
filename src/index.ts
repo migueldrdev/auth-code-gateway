@@ -26,28 +26,50 @@ const cooldowns = new Map<number, number>();
 app.get('/', (req: Request, res: Response) => {
     res.status(200).json({ status: 'OK', message: 'Servidor del Gateway Activo 🚀' });
 });
+/* ==========================================
+// 🛡️ SISTEMA DE CACHÉ DINÁMICA (Lista Blanca)
+const whitelistIds = new Set<number>();
+const whitelistUsernames = new Set<string>();
+const userRepoForWhitelist = new SupabaseUserRepository();
 
-// 🛡️ LISTA BLANCA (Whitelisting)
-// Coloca aquí los IDs numéricos de tus 4-6 usuarios de confianza
-const ALLOWED_USERS = [
-    5633294939, // Tu ID de Telegram
-];
+async function syncWhitelist() {
+    try {
+        const { ids, usernames } = await userRepoForWhitelist.obtenerIdentidadesPermitidas();
+        
+        whitelistIds.clear();
+        whitelistUsernames.clear();
+        
+        ids.forEach(id => whitelistIds.add(id));
+        usernames.forEach(username => whitelistUsernames.add(username));
+        
+        console.log(`🔄 Lista Blanca sincronizada: ${whitelistIds.size} IDs, ${whitelistUsernames.size} Usernames activos.`);
+    } catch (error) {
+        console.error('❌ Error sincronizando whitelist:', error);
+    }
+}
 
-// 🛑 MIDDLEWARE DE SEGURIDAD ABSOLUTA (El "Cadenenero")
+// Ejecutar sincronización al arrancar el servidor
+syncWhitelist();
+// Programar la sincronización cada 5 minutos (300000 milisegundos)
+setInterval(syncWhitelist, 300000);
+
+// 🛑 MIDDLEWARE DE SEGURIDAD ABSOLUTA (El "Cadenenero" Dinámico)
 bot.use(async (ctx, next) => {
     const userId = ctx.from?.id;
-    
-    // Si el usuario no tiene ID o no está en nuestra lista VIP, lo ignoramos.
-    // El 'return' vacío hace que el bot no haga NADA. No consume base de datos, 
-    // y el usuario que hace spam sentirá que el bot está apagado o roto.
-    if (!userId || !ALLOWED_USERS.includes(userId)) {
-        console.warn(`🚨 Intento de acceso bloqueado del usuario no autorizado: ${userId}`);
+    const username = ctx.from?.username;
+
+    // Verificamos si el ID o el Username están en nuestra caché RAM
+    const isIdAllowed = userId && whitelistIds.has(userId);
+    const isUsernameAllowed = username && whitelistUsernames.has(username);
+
+    if (!isIdAllowed && !isUsernameAllowed) {
+        // Rechazo silencioso (O(1) complejidad, sin consultas a BD)
         return; 
     }
 
-    // Si está en la lista blanca, le damos pase al resto del código (/start, botones, etc.)
     return next();
 });
+========================================== */
 
 bot.command('start', async (ctx) => {
     const username = ctx.from.username || 'Usuario';

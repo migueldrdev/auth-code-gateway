@@ -5,4 +5,5 @@ export interface IUserRepository {
     findByTelegramUsername(username: string): Promise<User | null>;
     linkTelegramId(userId: string, telegramId: number): Promise<void>;
     checkSubscription(userId: string, serviceName: string): Promise<boolean>;
+    obtenerIdentidadesPermitidas(): Promise<{ ids: number[], usernames: string[] }>;
 }
