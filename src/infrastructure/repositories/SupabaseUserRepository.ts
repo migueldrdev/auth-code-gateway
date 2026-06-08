@@ -92,4 +92,20 @@ export class SupabaseUserRepository implements IUserRepository {
 
         return true;
     }
+
+    async obtenerIdentidadesPermitidas(): Promise<{ ids: number[], usernames: string[] }> {
+        const { data, error } = await this.supabase
+            .from('users')
+            .select('telegram_id, telegram_username');
+            
+        if (error || !data) {
+            console.error('❌ Error obteniendo lista blanca de Supabase:', error?.message);
+            return { ids: [], usernames: [] };
+        }
+
+        const ids = data.filter(u => u.telegram_id !== null).map(u => Number(u.telegram_id));
+        const usernames = data.map(u => u.telegram_username);
+
+        return { ids, usernames };
+    }
 }
