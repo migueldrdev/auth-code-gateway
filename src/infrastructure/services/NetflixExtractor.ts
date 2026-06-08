@@ -19,57 +19,54 @@ export class NetflixExtractor implements IExtractorStrategy {
 
     try {
       await client.connect();
-      console.log(
-        `✅ [${this.providerName}] Conectado a la bandeja de entrada.`,
-      );
-
-      let lock = await client.getMailboxLock("INBOX");
+      const lock = await client.getMailboxLock("INBOX");
 
       try {
-        const messages = await client.search({
-          from: "info@account.netflix.com",
+        // 1. Búsqueda estricta: Solo correos no leídos del remitente oficial de OTPs
+        const mensajes = await client.search({
           seen: false,
+          from: "info@account.netflix.com",
         });
 
-        // 🛡️ TYPE GUARD 1: Validamos que messages no sea 'false' y que tenga elementos
-        if (!messages || messages.length === 0) {
-          return null;
-        }
+        if (!mensajes || mensajes.length === 0) return null;
 
-        const ultimoUid = messages[messages.length - 1];
+        // Obtenemos el último UID del arreglo (ya sabemos que es seguro) 
+        const ultimoUid = mensajes[mensajes.length - 1] as number;
 
-        // Le decimos a TypeScript que estamos seguros de que es un número
-        const mensajeRaw = await client.fetchOne(ultimoUid as number, {
-          source: true,
-        });
+        // Pedimos el contenido del correo
+        const mensajeRaw = await client.fetchOne(ultimoUid, { source: true });
 
-        // 🛡️ TYPE GUARD 2: Validamos que mensajeRaw no sea 'false' y contenga 'source'
+        // 🛡️ NUEVA DEFENSA: Verificamos que sí se haya descargado correctamente
         if (!mensajeRaw || !mensajeRaw.source) {
           return null;
         }
 
         const parsed = await simpleParser(mensajeRaw.source);
+        const texto = parsed.text || "";
 
-        const textoCorreo = parsed.text || parsed.textAsHtml || "";
-        const match = textoCorreo.match(/\b\d{4,6}\b/);
+        // 2. Regex estricto: Busca exactamente 4 dígitos rodeados de espacios/bordes
+        const regex = /\b\d{4}\b/;
+        const match = texto.match(regex);
 
         if (match) {
-          // Devolvemos el código y el ID único del correo
+          // 3. ¡MARCAR COMO LEÍDO!
+          // Agregamos la bandera \Seen a este correo en Gmail
+          await client.messageFlagsAdd(ultimoUid, ["\\Seen"], { uid: true });
+
           return {
             codigo: match[0],
-            emailUid: ultimoUid as number,
+            emailUid: ultimoUid,
           };
         }
-
-        return null;
       } finally {
         lock.release();
       }
     } catch (error) {
-      console.error(`❌ [${this.providerName}] Error en extracción:`, error);
-      return null;
+      console.error("Error en NetflixExtractor:", error);
     } finally {
       await client.logout();
     }
+
+    return null;
   }
 }
