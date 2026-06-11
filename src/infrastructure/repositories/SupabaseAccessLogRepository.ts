@@ -15,7 +15,7 @@ export class SupabaseAccessLogRepository implements IAccessLogRepository {
         this.supabase = createClient(url, key);
     }
 
-    async crearLog(userId: string, serviceName: string): Promise<string> {
+    async createLog(userId: string, serviceName: string): Promise<string> {
         // Primero necesitamos el ID del servicio (Netflix)
         const { data: service } = await this.supabase
             .from('services')
@@ -43,7 +43,7 @@ export class SupabaseAccessLogRepository implements IAccessLogRepository {
         return data.id;
     }
 
-    async actualizarLog(logId: string, status: 'SUCCESS' | 'TIMEOUT' | 'ERROR', otpCode?: string, emailUid?: number): Promise<void> {
+    async updateLog(logId: string, status: 'SUCCESS' | 'TIMEOUT' | 'ERROR', otpCode?: string, emailUid?: number): Promise<void> {
         const payload: any = { 
             status, 
             resolved_at: new Date().toISOString() 
@@ -62,7 +62,7 @@ export class SupabaseAccessLogRepository implements IAccessLogRepository {
         }
     }
 
-    async obtenerConteoExitosHoy(userId: string, serviceName: string): Promise<number> {
+    async getSuccessCountToday(userId: string, serviceName: string): Promise<number> {
         // Obtenemos la fecha de hoy a las 00:00:00
         const inicioDeHoy = new Date();
         inicioDeHoy.setHours(0, 0, 0, 0);
@@ -91,7 +91,7 @@ export class SupabaseAccessLogRepository implements IAccessLogRepository {
         return count || 0;
     }
 
-    async fueCorreoUsado(emailUid: number): Promise<boolean> {
+    async wasEmailUsed(emailUid: number): Promise<boolean> {
         const { data, error } = await this.supabase
             .from('access_logs')
             .select('id')

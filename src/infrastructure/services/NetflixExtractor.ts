@@ -5,7 +5,7 @@ import { IExtractorStrategy } from "../../domain/interfaces/IExtractorStrategy";
 export class NetflixExtractor implements IExtractorStrategy {
   public providerName = "Netflix";
 
-  async extractOTP(): Promise<{ codigo: string; emailUid: number } | null> {
+  async extractOTP(): Promise<{ code: string; emailUid: number } | null> {
     const client = new ImapFlow({
       host: "imap.gmail.com",
       port: 993,
@@ -54,7 +54,7 @@ export class NetflixExtractor implements IExtractorStrategy {
           await client.messageFlagsAdd(ultimoUid, ["\\Seen"], { uid: true });
 
           return {
-            codigo: match[0],
+            code: match[0],
             emailUid: ultimoUid,
           };
         }
