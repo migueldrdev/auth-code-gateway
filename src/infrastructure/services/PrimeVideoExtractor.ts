@@ -4,7 +4,7 @@ import { IExtractorStrategy } from '../../domain/interfaces/IExtractorStrategy';
 export class PrimeVideoExtractor implements IExtractorStrategy {
     providerName = 'prime';
 
-    async extractOTP(): Promise<{ codigo: string; emailUid: number } | null> {
+    async extractOTP(): Promise<{ code: string; emailUid: number } | null> {
         const secret = process.env.PRIME_TOTP_SECRET;
 
         if (!secret) {
@@ -20,7 +20,7 @@ export class PrimeVideoExtractor implements IExtractorStrategy {
             const fakeUid = Date.now();
 
             return {
-                codigo: token,
+                code: token,
                 emailUid: fakeUid
             };
         } catch (error) {

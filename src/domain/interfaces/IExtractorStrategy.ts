@@ -1,5 +1,5 @@
 export interface ExtractorResult {
-    codigo: string;
+    code: string;
     emailUid: number;
 }
 

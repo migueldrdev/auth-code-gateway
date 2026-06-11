@@ -1,6 +1,6 @@
 export interface User {
     id: string;
-    telegramId: number | null;
-    telegramUsername: string;
+    externalId: string | number | null; // Antes telegramId
+    externalUsername: string;           // Antes telegramUsername
     createdAt: Date;
 }
