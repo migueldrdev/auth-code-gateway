@@ -17,50 +17,48 @@ export class SupabaseUserRepository implements IUserRepository {
         this.supabase = createClient(url, key);
     }
 
-    async findByTelegramId(telegramId: number): Promise<User | null> {
+    async findByExternalId(externalId: string | number): Promise<User | null> {
         const { data, error } = await this.supabase
             .from('users')
             .select('*')
-            .eq('telegram_id', telegramId)
+            .eq('telegram_id', externalId)
             .maybeSingle();
 
         if (error || !data) return null;
 
         return {
             id: data.id,
-            telegramId: Number(data.telegram_id),
-            telegramUsername: data.telegram_username,
+            externalId: data.telegram_id,
+            externalUsername: data.telegram_username,
             createdAt: new Date(data.created_at)
         };
     }
 
-    async findByTelegramUsername(username: string): Promise<User | null> {
-        console.log(`SupabaseUserRepository: Buscando usuario por telegram_username = ${username}`);
+    async findByExternalUsername(username: string): Promise<User | null> {
         const { data, error } = await this.supabase
             .from('users')
             .select('*')
             .ilike('telegram_username', `%${username}%`)
             .maybeSingle();
 
-        console.log(`SupabaseUserRepository: Resultado de la consulta por username:`, { data, error });
         if (error || !data) return null;
         
         return {
             id: data.id,
-            telegramId: data.telegram_id ? Number(data.telegram_id) : null,
-            telegramUsername: data.telegram_username,
+            externalId: data.telegram_id,
+            externalUsername: data.telegram_username,
             createdAt: new Date(data.created_at)
         };
     }
 
-    async linkTelegramId(userId: string, telegramId: number): Promise<void> {
+    async linkExternalId(userId: string, externalId: string | number): Promise<void> {
         const { error } = await this.supabase
             .from('users')
-            .update({ telegram_id: telegramId })
+            .update({ telegram_id: externalId })
             .eq('id', userId);
 
         if (error) {
-            throw new Error(`❌ Error al vincular telegram_id: ${error.message}`);
+            throw new Error(`❌ Error al vincular external_id: ${error.message}`);
         }
     }
 
