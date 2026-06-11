@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import { Telegraf, Markup } from 'telegraf';
 import { NetflixExtractor } from './infrastructure/services/NetflixExtractor';
+import { PrimeVideoExtractor } from './infrastructure/services/PrimeVideoExtractor';
 import { ObtenerCodigoUseCase } from './application/use-cases/ObtenerCodigoUseCase';
 import { SupabaseUserRepository } from './infrastructure/repositories/SupabaseUserRepository';
 import { AutorizarUsuarioUseCase } from './application/use-cases/AutorizarUsuarioUseCase';
@@ -22,6 +23,7 @@ app.use(express.json());
 const activeRequests = new Set<number>();
 // 2. Cooldown para evitar spam a la Base de Datos (3 segundos)
 const cooldowns = new Map<number, number>();
+
 
 app.get('/', (req: Request, res: Response) => {
     res.status(200).json({ status: 'OK', message: 'Servidor del Gateway Activo 🚀' });
@@ -93,20 +95,32 @@ bot.action('action_netflix', async (ctx) => {
     // Si han pasado menos de 3000 milisegundos desde su último click, lo ignoramos.
     if (now - lastClickTime < 3000) {
         // Usamos answerCbQuery para mostrarle un popup sutil arriba sin ensuciar el chat
-        await ctx.answerCbQuery('⏳ Espera unos segundos antes de volver a presionar.');
-        return; 
+        try {
+            await ctx.answerCbQuery('⏳ Espera unos segundos antes de volver a presionar.');
+        } catch (e) {
+            console.log('⚠️ Ignorando callback query expirado en cooldown de Netflix');
+        }
+        return;
     }
     // Actualizamos la hora de su último click
     cooldowns.set(userId, now);
 
     // 🛡️ DEFENSA 2: Candado de Concurrencia (El proceso de 2 minutos)
     if (activeRequests.has(userId)) {
-        await ctx.answerCbQuery('⚠️ Ya tienes una búsqueda de correo en curso.');
+        try {
+            await ctx.answerCbQuery('⚠️ Ya tienes una búsqueda de correo en curso.');
+        } catch (e) {
+            console.log('⚠️ Ignorando callback query expirado en concurrencia de Netflix');
+        }
         return;
-    } 
+    }
 
-    // Le quitamos el "relojito" de carga al botón
-    await ctx.answerCbQuery(); 
+    // Le quitamos el "relojito" de carga al botón de manera segura, ignorando errores de expiración
+    try {
+        await ctx.answerCbQuery(); 
+    } catch (e) {
+        console.log('⚠️ No se pudo responder al callback query de Netflix (Expirado), continuando flujo...');
+    }
 
     const userRepository = new SupabaseUserRepository();
     const logRepository = new SupabaseAccessLogRepository();
@@ -146,7 +160,24 @@ bot.action('action_netflix', async (ctx) => {
         // Le pasamos el logId para que pueda actualizarlo
         casoUso.ejecutar(logId).then(async (codigo) => {
             if (codigo) {
+                // 1. Enviamos el código al usuario
                 await ctx.reply(`🎉 ¡Código encontrado!\n\nTu código es: *${codigo}*`, { parse_mode: 'Markdown' });
+                
+                // 2. 🚨 ALERTA DE ADMINISTRADOR (Silenciosa)
+                const adminId = process.env.ADMIN_TELEGRAM_ID;
+                if (adminId) {
+                    try {
+                        // disable_notification: true hace que llegue sin sonido ni vibración
+                        await bot.telegram.sendMessage(
+                            adminId, 
+                            `✅ ÉXITO: Se entregó código de Netflix a @${username || userId}`, 
+                            { disable_notification: true }
+                        );
+                    } catch (error) {
+                        console.error('❌ Error enviando alerta al admin:', error);
+                    }
+                }
+
             } else {
                 await ctx.reply('⏰ Tiempo agotado. No hemos recibido el correo.');
             }
@@ -164,8 +195,100 @@ bot.action('action_netflix', async (ctx) => {
 });
 
 bot.action('action_prime', async (ctx) => {
-    await ctx.answerCbQuery('Aún en desarrollo 🛠️');
-    await ctx.reply('La integración con Prime Video estará disponible en el próximo Sprint.');
+    const userId = ctx.from?.id;
+    const username = ctx.from?.username;
+    if (!userId) return;
+
+    const now = Date.now();
+    const lastClickTime = cooldowns.get(userId) || 0;
+
+    // 🛡️ DEFENSA 1: Rate Limiting (Cooldown de 3 segundos)
+    // Si han pasado menos de 3000 milisegundos desde su último click, lo ignoramos.
+    if (now - lastClickTime < 3000) {
+        try {
+            await ctx.answerCbQuery('⏳ Espera unos segundos antes de volver a presionar.');
+        } catch (e) {
+            console.log('⚠️ Ignorando callback query expirado en cooldown de Prime');
+        }
+        return; 
+    }
+
+    // Actualizamos la hora de su último click
+    cooldowns.set(userId, now);
+
+    // 🛡️ DEFENSA 2: Candado de Concurrencia (El proceso de 2 minutos)
+    if (activeRequests.has(userId)) {
+        try {
+            await ctx.answerCbQuery('⚠️ Ya tienes una búsqueda en curso.');
+        } catch (e) {
+            console.log('⚠️ Ignorando callback query expirado en concurrencia de Prime');
+        }
+        return;
+    }
+
+    // Le quitamos el "relojito" de carga al botón de manera segura, ignorando errores de expiración
+    try {
+        await ctx.answerCbQuery(); 
+    } catch (e) {
+        console.log('⚠️ No se pudo responder al callback query de Prime (Expirado), continuando flujo...');
+    }
+
+    const userRepository = new SupabaseUserRepository();
+    const logRepository = new SupabaseAccessLogRepository();
+    const autorizarUseCase = new AutorizarUsuarioUseCase(userRepository);
+
+    try {
+        // 1. Consultamos a Supabase (Ahora protegidos por el Cooldown)
+        const validacion = await autorizarUseCase.ejecutar({
+            telegramId: userId,
+            telegramUsername: username,
+            serviceName: 'prime_video'
+        });
+
+        if (!validacion.isAuthorized) {
+            await ctx.reply(validacion.message);
+            return;
+        }
+
+        // 🛡️ REGLA DE NEGOCIO: Límite de 3 códigos por día
+        const exitosHoy = await logRepository.obtenerConteoExitosHoy(validacion.userId as string, 'prime_video');
+        if (exitosHoy >= 3) {
+            await ctx.reply('🚫 Límite diario alcanzado: Ya has solicitado 3 códigos de Prime Video hoy. Vuelve a intentarlo mañana.');
+            return;
+        }
+
+        // 📝 Creamos el Log en estado PENDING
+        const logId = await logRepository.crearLog(validacion.userId as string, 'prime_video');
+
+        // 2. Pasó la BD. Activamos el Candado Largo e iniciamos IMAP
+        activeRequests.add(userId);
+        
+        await ctx.reply('⏳ Validación exitosa. ⚡ Generando tu código seguro de Prime Video...');
+
+        const extractor = new PrimeVideoExtractor();
+        const casoUso = new ObtenerCodigoUseCase(extractor, logRepository);
+
+        // Le pasamos el logId para que pueda actualizarlo
+        casoUso.ejecutar(logId).then(async (codigo) => {
+            if (codigo) {
+                await ctx.reply(`🎉 ¡Código generado!\n\nTu código de Amazon es: *${codigo}*`, { parse_mode: 'Markdown' });
+                
+                // Aquí va tu Alerta de Administrador que configuramos antes
+                const adminId = process.env.ADMIN_TELEGRAM_ID;
+                if (adminId) {
+                    await bot.telegram.sendMessage(adminId, `✅ ÉXITO: Código Prime entregado a @${username}`, { disable_notification: true }).catch(console.error);
+                }
+            } else {
+                await ctx.reply('❌ Hubo un error al generar el código.');
+            }
+        }).finally(() => {
+            activeRequests.delete(userId);
+        });
+
+    } catch (error) {
+        console.error('❌ Error en el flujo de autorización:', error);
+        await ctx.reply('❌ Ocurrió un error al verificar tus credenciales de acceso.');
+    }
 });
 
 bot.on('text', async (ctx) => {
