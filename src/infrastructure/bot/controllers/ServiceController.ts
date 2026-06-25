@@ -15,28 +15,25 @@ export class ServiceController {
     ) {}
 
     async handle(externalId: number, username: string, sender: IMessageSender) {
-        
         const now = Date.now();
         const lastClickTime = this.cacheService.getLastClickTime(externalId);
 
-        // 🛡️ DEFENSE 1: Rate Limiting
+        // 🛡️ DEFENSE 1 & 2: Limites y Concurrencia
         if (now - lastClickTime < 3000) {
             await sender.showPopup('⏳ Por favor espera unos segundos antes de volver a presionar.');
             return;
         }
         this.cacheService.setLastClickTime(externalId, now);
 
-        // 🛡️ DEFENSE 2: Concurrency Lock
         if (this.cacheService.hasActiveRequest(externalId)) {
             await sender.showPopup('⚠️ Ya tienes una búsqueda de código en curso.');
             return;
         }
 
-        // Remove the loading icon from the button
         await sender.showPopup(); 
 
         try {
-            // 1. Authorization
+            // 1. Autorización y Límites
             const validation = await this.authorizeUserUseCase.execute({
                 externalId: externalId,
                 externalUsername: username,
@@ -48,32 +45,42 @@ export class ServiceController {
                 return;
             }
 
-            // 2. Business Limits
             const successToday = await this.logRepository.getSuccessCountToday(validation.userId as string, this.serviceId);
             if (successToday >= 3) {
                 await sender.sendMessage(`🚫 Límite diario alcanzado de ${this.serviceDisplayName}. Vuelve a intentarlo mañana.`);
                 return;
             }
 
-            // 3. Execution
+            // 2. Bloqueamos la concurrencia
             const logId = await this.logRepository.createLog(validation.userId as string, this.serviceId);
             this.cacheService.addActiveRequest(externalId);
             
             await sender.sendMessage(`⏳ Validación exitosa. Obteniendo tu código de ${this.serviceDisplayName}...`);
 
-            const authCode = await this.getAuthCodeUseCase.execute(logId);
+            // 🚀 3. BACKGROUND TASK (Fire and Forget) - ¡SIN AWAIT!
+            // Dejamos que esto corra de fondo para liberar a Telegraf inmediatamente.
+            this.getAuthCodeUseCase.execute(logId)
+                .then(async (authCode) => {
+                    if (authCode) {
+                        await sender.sendMessage(`🎉 ¡Código encontrado!\n\nTu código es: *${authCode}*`);
+                        await sender.notifyAdmin(`✅ ÉXITO: Código entregado a @${username}`);
+                    } else {
+                        await sender.sendMessage('⏰ Tiempo agotado o hubo un error al obtener el código.');
+                    }
+                })
+                .catch(async (error) => {
+                    console.error(`❌ Error in background execution [${this.serviceId}]:`, error);
+                    await sender.sendMessage('❌ Ocurrió un error interno en el servidor.');
+                })
+                .finally(() => {
+                    // Quitamos el candado solo cuando el proceso de fondo termine
+                    this.cacheService.removeActiveRequest(externalId);
+                });
 
-            if (authCode) {
-                await sender.sendMessage(`🎉 ¡Código encontrado!\n\nTu código es: *${authCode}*`);
-                await sender.notifyAdmin(`✅ ÉXITO: Código entregado a @${username}`);
-            } else {
-                await sender.sendMessage('⏰ Tiempo agotado o hubo un error al obtener el código.');
-            }
         } catch (error) {
             console.error(`❌ Error in ServiceController [${this.serviceId}]:`, error);
             await sender.sendMessage('❌ Ocurrió un error interno en el servidor.');
-        } finally {
-            this.cacheService.removeActiveRequest(externalId); // ✅ Eliminación limpia
+            this.cacheService.removeActiveRequest(externalId);
         }
     }
 }

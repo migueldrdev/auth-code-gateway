@@ -17,54 +17,70 @@ export class NetflixExtractor implements IExtractorStrategy {
       logger: false,
     });
 
+    // 🛡️ ESCUDO ANTI-CRASH: Atrapa errores de red de fondo para que Node.js no se apague
+    client.on('error', (err) => {
+        console.log('⚠️ IMAP Error de red ignorado de forma segura:', err.message);
+    });
+    
+    client.on('close', () => {
+        console.log('⚠️ Conexión IMAP cerrada por el servidor.');
+    });
+
     try {
       await client.connect();
       const lock = await client.getMailboxLock("INBOX");
 
       try {
-        // 1. Búsqueda estricta: Solo correos no leídos del remitente oficial de OTPs
-        const mensajes = await client.search({
-          seen: false,
-          from: "info@account.netflix.com",
-        });
+        const startTime = Date.now();
+        const timeout = 115000; 
 
-        if (!mensajes || mensajes.length === 0) return null;
+        while (Date.now() - startTime < timeout) {
+          // 🛡️ Verificamos que el socket siga vivo antes de preguntar
+          if (!client.usable) {
+              console.log('⚠️ El socket de IMAP murió (ETIMEDOUT). Abortando este ciclo...');
+              break; // Rompemos el bucle para que el UseCase vuelva a intentar con una nueva conexión
+          }
 
-        // Obtenemos el último UID del arreglo (ya sabemos que es seguro) 
-        const ultimoUid = mensajes[mensajes.length - 1] as number;
+          const mensajes = await client.search({
+            seen: false,
+            from: "info@account.netflix.com",
+          });
 
-        // Pedimos el contenido del correo
-        const mensajeRaw = await client.fetchOne(ultimoUid, { source: true });
+          if (mensajes && mensajes.length > 0) {
+            const ultimoUid = mensajes[mensajes.length - 1] as number;
+            const mensajeRaw = await client.fetchOne(ultimoUid, { source: true });
 
-        // 🛡️ NUEVA DEFENSA: Verificamos que sí se haya descargado correctamente
-        if (!mensajeRaw || !mensajeRaw.source) {
-          return null;
-        }
+            if (mensajeRaw && mensajeRaw.source) {
+              const parsed = await simpleParser(mensajeRaw.source);
+              const texto = parsed.text || "";
+              const regex = /\b\d{4}\b/;
+              const match = texto.match(regex);
 
-        const parsed = await simpleParser(mensajeRaw.source);
-        const texto = parsed.text || "";
+              if (match) {
+                await client.messageFlagsAdd(ultimoUid, ["\\Seen"], { uid: true });
+                return { code: match[0], emailUid: ultimoUid };
+              }
+            }
+          }
 
-        // 2. Regex estricto: Busca exactamente 4 dígitos rodeados de espacios/bordes
-        const regex = /\b\d{4}\b/;
-        const match = texto.match(regex);
-
-        if (match) {
-          // 3. ¡MARCAR COMO LEÍDO!
-          // Agregamos la bandera \Seen a este correo en Gmail
-          await client.messageFlagsAdd(ultimoUid, ["\\Seen"], { uid: true });
-
-          return {
-            code: match[0],
-            emailUid: ultimoUid,
-          };
+          await new Promise(resolve => setTimeout(resolve, 10000));
         }
       } finally {
         lock.release();
       }
-    } catch (error) {
-      console.error("Error en NetflixExtractor:", error);
+    } catch (error: any) {
+      console.error("❌ Error controlado en NetflixExtractor:", error.message);
     } finally {
-      await client.logout();
+      // 🛡️ Cierre seguro incluso si el socket ya colapsó
+      try {
+         if (client.usable) {
+             await client.logout();
+         } else {
+             client.close();
+         }
+      } catch (e) {
+         // Cierre silencioso
+      }
     }
 
     return null;
